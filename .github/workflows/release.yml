@@ -51,3 +51,4 @@ jobs:
           files: firmware.bin
           fail_on_unmatched_files: true
           generate_release_notes: true
+          make_latest: true          # 强制设为 latest,设备只认 latest,避免版本号混用时的歧义

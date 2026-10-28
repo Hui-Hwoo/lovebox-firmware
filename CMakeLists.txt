@@ -1,4 +1,4 @@
 cmake_minimum_required(VERSION 3.16)
-set(PROJECT_VER "9.9.151")
+set(PROJECT_VER "1.0.0")
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(lovebox_fw)

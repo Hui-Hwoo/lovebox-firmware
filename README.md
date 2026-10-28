@@ -72,9 +72,10 @@ idf.py build
 # 产物:build/lovebox_fw.bin
 ```
 
-版本号在 `CMakeLists.txt` 的 `set(PROJECT_VER "...")`;CI 会用 tag 覆盖它。
+版本号在 `CMakeLists.txt` 的 `set(PROJECT_VER "...")`;CI 会用 tag 覆盖它。采用 `主.次.补丁`(如 `1.0.0`)。
 
-> 版本号目前是 `9.9.x`,是早期"顶替原厂 OTA"时为了显得更新用的高版本号遗留,现已无意义,后续可切到干净的版本。
+> 设备只升级到"版本号数字更高"的 release,且只认 GitHub 标记的 **latest**(工作流已设 `make_latest:true`)。
+> 所以切换版本体系(如从旧的 9.9.x 到 1.x)时,旧体系设备不会自动跨体系升级,需局域网/浏览器手动刷一次。
 
 ---
 
