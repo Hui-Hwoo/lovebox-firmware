@@ -151,8 +151,12 @@ GitHub Actions 云端用 ESP-IDF 编译,发布 Release(资产名固定 `firmware
 - 离线、任何同网络设备都能传。
 
 ### 方式 3 — 局域网自动拉取(在家,~30 秒生效)
-在服务器(如 Mac)上用任意 HTTP 服务供 `firmware.bin`,设备轮询 `http://<LB_SERVER_IP>:8080/fw/firmware.bin`。
-改完 `idf.py build` → 把 `build/lovebox_fw.bin` 拷到服务目录即可。需设备在家里网。
+在服务器(如 Mac)上跑仓库里的小服务器,设备轮询 `http://<LB_SERVER_IP>:8080/fw/firmware.bin`:
+```sh
+idf.py build
+python3 scripts/lan_serve.py build/lovebox_fw.bin   # 本机 IP 需等于 LB_SERVER_IP
+```
+改完重新 build,设备约 30 秒后自动拉取(版本不同即更新)。需设备在家里网。
 
 ### 方式 4 — 恢复/兜底
 见第九节与 **RECOVERY.md**。
