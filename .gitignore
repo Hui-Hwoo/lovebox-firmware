@@ -1,0 +1,8 @@
+build/
+managed_components/
+dependencies.lock
+sdkconfig.old
+*.bak
+.DS_Store
+# 本地机密:Wi-Fi 默认账号密码等,不入库
+main/lovebox_config.h

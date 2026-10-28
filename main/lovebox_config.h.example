@@ -1,0 +1,16 @@
+// 模板:复制为 lovebox_config.h 并填入你自己的值(真实文件不入库,见 .gitignore)
+//   cp main/lovebox_config.h.example main/lovebox_config.h
+#pragma once
+
+// —— 默认 Wi-Fi(首次上电用;之后可在设备网页里改,存 NVS)——
+#define LB_WIFI_SSID   "YourWiFiName"
+#define LB_WIFI_PASS   "YourWiFiPassword"
+
+// —— 局域网 OTA 服务器(在家时可选,设备会尽力轮询;没有就留着不影响)——
+#define LB_SERVER_IP   "10.0.0.186"
+#define LB_SERVER_PORT 8080
+
+// —— 杂项 ——
+#define LB_HEALTHY_TIMEOUT_S 90     // (旧版自救用,现已不触发回滚)
+#define LB_OTA_POLL_S        30     // 局域网 OTA 轮询间隔(秒)
+#define LB_FW_VERSION        1      // (旧版报到用)
