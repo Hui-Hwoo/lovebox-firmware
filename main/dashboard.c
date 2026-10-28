@@ -155,27 +155,85 @@ static void draw_center(int y, const char *s, uint16_t fg, uint16_t bg, int scal
 #define COL_CITY   GRAY(110)   // 城市:暗灰(辅助)
 #define COL_IP     GRAY(70)    // IP:最暗
 
-// 天气一行 "<num>°<U> <cond>":数字 + 度数小圈 + 单位 + 描述,整体居中,先清行
-static void draw_weather(int y, const char *num, const char *cond, int scale, uint16_t col) {
-    char ul[2] = { (g_cfg.unit=='C') ? 'C' : 'F', 0 };
+// ---------- 天气图标(用图形画,替代会溢出的文字)----------
+typedef enum { WX_SUN, WX_PARTLY, WX_CLOUD, WX_FOG, WX_RAIN, WX_SNOW, WX_STORM } wx_t;
+
+static void icon_cloud(int cx, int cy, uint16_t col) {
+    fill_circle(cx-7, cy+1, 5, col);
+    fill_circle(cx+7, cy+1, 5, col);
+    fill_circle(cx,   cy-3, 7, col);
+    fill_rect(cx-7, cy+1, 15, 6, col);
+}
+static void icon_sun(int cx, int cy, int r, uint16_t col) {
+    fill_circle(cx, cy, r, col);
+    for (int k = 0; k < 8; k++) {
+        float a = k * 0.78539816f;
+        draw_line(cx+(int)((r+2)*cosf(a)), cy+(int)((r+2)*sinf(a)),
+                  cx+(int)((r+6)*cosf(a)), cy+(int)((r+6)*sinf(a)), col);
+    }
+}
+static void draw_weather_icon(int cx, int cy, wx_t cat, uint16_t col) {
+    switch (cat) {
+    case WX_SUN:
+        icon_sun(cx, cy, 6, col);
+        break;
+    case WX_PARTLY:
+        icon_sun(cx-6, cy-5, 4, col);
+        icon_cloud(cx+3, cy+3, col);
+        break;
+    case WX_CLOUD:
+        icon_cloud(cx, cy, col);
+        break;
+    case WX_FOG:
+        for (int i = 0; i < 4; i++) { fill_rect(cx-10+(i&1)*3, cy-7+i*4, 20, 2, col); }
+        break;
+    case WX_RAIN:
+        icon_cloud(cx, cy-4, col);
+        for (int k = -1; k <= 1; k++) { draw_line(cx+k*6, cy+6, cx+k*6-2, cy+13, col); }
+        break;
+    case WX_SNOW:
+        icon_cloud(cx, cy-4, col);
+        for (int k = -1; k <= 1; k++) { fill_circle(cx+k*6, cy+10, 1, col); }
+        break;
+    case WX_STORM:
+        icon_cloud(cx, cy-4, col);
+        draw_line(cx+2, cy+5, cx-3, cy+10, col);
+        draw_line(cx-3, cy+10, cx+3, cy+10, col);
+        draw_line(cx+3, cy+10, cx-2, cy+16, col);
+        break;
+    }
+}
+static wx_t wmo_icon(int c) {
+    if (c <= 1) return WX_SUN;
+    if (c == 2) return WX_PARTLY;
+    if (c == 3) return WX_CLOUD;
+    if (c == 45 || c == 48) return WX_FOG;
+    if (c >= 71 && c <= 77) return WX_SNOW;
+    if (c == 85 || c == 86) return WX_SNOW;
+    if ((c >= 51 && c <= 67) || (c >= 80 && c <= 82)) return WX_RAIN;
+    if (c >= 95) return WX_STORM;
+    return WX_CLOUD;
+}
+
+// 天气一行:温度 "<num>°<U>" + 天气图标,整体居中,固定布局(不随描述长短变化)
+static void draw_weather(int y, const char *num, int wcode, int scale, uint16_t col) {
+    char ul[2] = { (g_cfg.unit == 'C') ? 'C' : 'F', 0 };
     int W = display_width();
     int gap = scale, dd = scale * 2;
     int wnum = text_width(num, scale);
     int wU = text_width(ul, scale);
-    int wsp = 8*scale;                      // 温度与描述间空格
-    int wcond = text_width(cond, scale);
-    int total = wnum + gap + dd + gap + wU + wsp + wcond;
+    int tempw = wnum + gap + dd + gap + wU;
+    int iconw = 34, sp = 18;
+    int total = tempw + sp + iconw;
     int x = (W - total) / 2;
     if (x < 0) x = 0;
-    fill_rect(0, y, W, 8*scale, BG);        // 清整行
+    fill_rect(0, y-6, W, 8*scale + 18, BG);     // 清行(含图标上下的射线/雨滴)
     draw_text(x, y, num, col, BG, scale);
-    int dx = x + wnum + gap;
-    int t = scale >= 3 ? 2 : 1;
-    fill_rect(dx, y, dd, dd, col);          // 度数圆环
+    int dx = x + wnum + gap, t = scale >= 3 ? 2 : 1;
+    fill_rect(dx, y, dd, dd, col);              // 度数圆环
     fill_rect(dx+t, y+t, dd-2*t, dd-2*t, BG);
-    int ux = dx + dd + gap;
-    draw_text(ux, y, ul, col, BG, scale);
-    draw_text(ux + wU + wsp, y, cond, col, BG, scale);
+    draw_text(dx + dd + gap, y, ul, col, BG, scale);
+    draw_weather_icon(x + tempw + sp + iconw/2, y + 4*scale - 2, wmo_icon(wcode), col);
 }
 
 // 居中画一行小字,但只清除左侧宽度(避开右下角图标)
@@ -272,7 +330,7 @@ void dashboard_run(void) {
         }
         // 日期 / 天气(一行) / 城市 —— 各自内容变了才重画
         if (strcmp(cur_date, last_date)) { draw_center(Y_DATE, cur_date, COL_DATE, BG, S_DATE); strcpy(last_date, cur_date); }
-        if (cur_wx[0] && strcmp(cur_wx, last_wx)) { draw_weather(Y_WX, cur_temp, cur_cond, S_WX, COL_WX); strcpy(last_wx, cur_wx); }
+        if (cur_wx[0] && strcmp(cur_wx, last_wx)) { draw_weather(Y_WX, cur_temp, s_wcode, S_WX, COL_WX); strcpy(last_wx, cur_wx); }
         if (g_cfg.city[0] && strcmp(g_cfg.city, last_city)) { draw_center(Y_CITY, g_cfg.city, COL_CITY, BG, S_CITY); strcpy(last_city, g_cfg.city); }
         if (g_ip[0] && strcmp(g_ip, last_ip))               { draw_left_line(Y_IP, g_ip, COL_IP, S_IP, IP_CLEAR_W); strcpy(last_ip, g_ip); }
 

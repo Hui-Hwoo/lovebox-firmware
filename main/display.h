@@ -22,6 +22,7 @@ void display_init(void);
 void fill_screen(uint16_t color);
 void fill_rect(int x, int y, int w, int h, uint16_t color);
 void draw_line(int x0, int y0, int x1, int y1, uint16_t color);
+void fill_circle(int cx, int cy, int r, uint16_t color);
 void draw_bitmap(int x, int y, int w, int h, const uint8_t *bits, uint16_t fg, uint16_t bg);
 int  draw_text(int x, int y, const char *s, uint16_t fg, uint16_t bg, int scale);
 int  text_width(const char *s, int scale);

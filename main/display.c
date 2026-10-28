@@ -2,6 +2,7 @@
 // 引脚: SCLK18 MOSI23 CS5 DC26 RST27 BL16; SPI2(VSPI) 10MHz; MADCTL=0x28(MV+BGR)+INVON。
 // 颜色补偿: 面板变换 seenR=~sentB, seenG=sentG, seenB=~sentR。发送前对每个颜色做 comp()。
 #include <string.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/spi_master.h"
@@ -142,6 +143,14 @@ void draw_bitmap(int x, int y, int w, int h, const uint8_t *bits, uint16_t fg, u
             line[2*c] = v>>8; line[2*c+1] = v&0xFF;
         }
         DATN(line, w*2);
+    }
+}
+
+// 实心圆(按行用 fill_rect 画)
+void fill_circle(int cx, int cy, int r, uint16_t color) {
+    for (int dy = -r; dy <= r; dy++) {
+        int dx = (int)(sqrt((double)(r*r - dy*dy)) + 0.5);
+        fill_rect(cx - dx, cy + dy, 2*dx + 1, 1, color);
     }
 }
 
