@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -14,6 +15,7 @@
 #include "cJSON.h"
 #include "display.h"
 #include "netcfg.h"
+#include "claude_icon.h"
 
 static const char *T = "dash";
 
@@ -128,56 +130,69 @@ static void draw_center(int y, const char *s, uint16_t fg, uint16_t bg, int scal
 #define BG C_BLACK
 
 // 版面坐标(320x240)与字号/灰阶 —— 主次分层
-#define Y_CLOCK  22
+#define Y_CLOCK  20
 #define S_CLOCK  6
-#define Y_DATE   92
+#define Y_DATE   88
 #define S_DATE   2
-#define Y_DIV    120          // 分隔线
-#define Y_TEMP   138
-#define S_TEMP   4
-#define Y_COND   182
-#define S_COND   2
-#define Y_CITY   206
+#define Y_DIV    116          // 分隔线
+#define Y_WX     140          // 天气(温度+描述 一行)
+#define S_WX     3
+#define Y_CITY   180
 #define S_CITY   2
-#define Y_IP     230          // 底部小字:设备 IP(找设置页用)
+#define Y_IP     218          // 底部小字:设备 IP(只占左侧,避开右下角图标)
 #define S_IP     1
+#define IP_CLEAR_W 266        // IP 行清除宽度(右侧留给 Claude 图标)
+#define ICON_X   (320 - CLAUDE_ICON_W - 2)   // 右下角
+#define ICON_Y   (240 - CLAUDE_ICON_H - 2)
 #define COL_CLOCK  0xFFFF      // 时间:最亮(主信息)
 #define COL_DATE   GRAY(170)   // 日期:浅灰
 #define COL_DIV    GRAY(60)    // 分隔线:很暗
-#define COL_TEMP   GRAY(235)   // 温度:亮(次主信息)
-#define COL_COND   GRAY(150)   // 天气描述:中灰
-#define COL_CITY   GRAY(105)   // 城市:暗灰(辅助)
+#define COL_WX     GRAY(225)   // 天气:亮(次主信息)
+#define COL_CITY   GRAY(110)   // 城市:暗灰(辅助)
 #define COL_IP     GRAY(70)    // IP:最暗
 
-// 画温度 "<num>°<U>":数字 + 度数小圈 + 单位字母,整体居中,先清行
-static void draw_temp(int y, const char *num, int scale, uint16_t col) {
+// 天气一行 "<num>°<U> <cond>":数字 + 度数小圈 + 单位 + 描述,整体居中,先清行
+static void draw_weather(int y, const char *num, const char *cond, int scale, uint16_t col) {
     char ul[2] = { (g_cfg.unit=='C') ? 'C' : 'F', 0 };
     int W = display_width();
+    int gap = scale, dd = scale * 2;
     int wnum = text_width(num, scale);
-    int dd = scale * 2;                    // 度圈外径
-    int gap = scale;
     int wU = text_width(ul, scale);
-    int total = wnum + gap + dd + gap + wU;
+    int wsp = 8*scale;                      // 温度与描述间空格
+    int wcond = text_width(cond, scale);
+    int total = wnum + gap + dd + gap + wU + wsp + wcond;
     int x = (W - total) / 2;
     if (x < 0) x = 0;
-    fill_rect(0, y, W, 8*scale, BG);       // 清温度行
+    fill_rect(0, y, W, 8*scale, BG);        // 清整行
     draw_text(x, y, num, col, BG, scale);
     int dx = x + wnum + gap;
-    int t = scale >= 3 ? 2 : 1;            // 圈的线宽
-    fill_rect(dx, y, dd, dd, col);         // 外方块
-    fill_rect(dx+t, y+t, dd-2*t, dd-2*t, BG); // 内挖空 = 圆环(度数符号)
-    draw_text(dx + dd + gap, y, ul, col, BG, scale);
+    int t = scale >= 3 ? 2 : 1;
+    fill_rect(dx, y, dd, dd, col);          // 度数圆环
+    fill_rect(dx+t, y+t, dd-2*t, dd-2*t, BG);
+    int ux = dx + dd + gap;
+    draw_text(ux, y, ul, col, BG, scale);
+    draw_text(ux + wU + wsp, y, cond, col, BG, scale);
+}
+
+// 居中画一行小字,但只清除左侧宽度(避开右下角图标)
+static void draw_left_line(int y, const char *s, uint16_t fg, int scale, int clear_w) {
+    int w = text_width(s, scale);
+    int x = (display_width() - w) / 2; if (x < 0) x = 0;
+    fill_rect(0, y, clear_w, 8*scale, BG);
+    draw_text(x, y, s, fg, BG, scale);
 }
 
 // 配网模式提示屏(连不上已存 Wi-Fi 时)
 void dashboard_setup_screen(void) {
     display_init();
     fill_screen(C_BLACK);
-    draw_center(40,  "Wi-Fi Setup", 0xFFFF, C_BLACK, 3);
-    draw_center(95,  "1. Join Wi-Fi:", GRAY(150), C_BLACK, 2);
-    draw_center(120, "Lovebox-Setup", 0xFFFF, C_BLACK, 2);
-    draw_center(160, "2. Open in browser:", GRAY(150), C_BLACK, 2);
-    draw_center(185, "192.168.4.1", 0xFFFF, C_BLACK, 2);
+    draw_center(26,  "Wi-Fi Setup", 0xFFFF, C_BLACK, 3);
+    draw_center(76,  "Join:", GRAY(150), C_BLACK, 2);
+    draw_center(98,  "Lovebox-Setup", 0xFFFF, C_BLACK, 2);
+    draw_center(126, "Password:", GRAY(150), C_BLACK, 2);
+    draw_center(148, "lovebox888", 0xFFFF, C_BLACK, 2);
+    draw_center(180, "Then open:", GRAY(150), C_BLACK, 2);
+    draw_center(202, "192.168.4.1", 0xFFFF, C_BLACK, 2);
     while (1) vTaskDelay(pdMS_TO_TICKS(1000));
 }
 
@@ -193,11 +208,11 @@ void dashboard_run(void) {
     // 缓存上次渲染内容;只有变化时才重画,避免闪烁
     char cur_clock[8] = "",  last_clock[8] = "";
     char cur_date[24] = "",  last_date[24] = "";
-    char cur_temp[8] = "",   last_temp[8] = "";
-    char cur_cond[24] = "",  last_cond[24] = "";
+    char cur_temp[8] = "",   cur_cond[24] = "";
+    char cur_wx[40] = "",    last_wx[40] = "";
     char last_city[40] = "";
     char last_ip[16] = "";
-    bool div_drawn = false;
+    bool div_drawn = false, icon_drawn = false;
     int  last_wfetch = -1000;   // 分钟计数,用于每15分钟刷新天气
 
     // 等首次对时(最多30秒),期间保持提示
@@ -220,10 +235,12 @@ void dashboard_run(void) {
         if (s_weather_ok) {
             snprintf(cur_temp, sizeof(cur_temp), "%.0f", s_temp_f);
             snprintf(cur_cond, sizeof(cur_cond), "%s", wmo_text(s_wcode));
+            snprintf(cur_wx, sizeof(cur_wx), "%s|%s", cur_temp, cur_cond);
         }
 
-        // 分隔线(静态,画一次)
+        // 分隔线 + Claude 图标(静态,各画一次)
         if (!div_drawn) { fill_rect(60, Y_DIV, display_width()-120, 2, COL_DIV); div_drawn = true; }
+        if (!icon_drawn) { draw_bitmap(ICON_X, ICON_Y, CLAUDE_ICON_W, CLAUDE_ICON_H, claude_icon_bits, C_CLAUDE, BG); icon_drawn = true; }
 
         // 时钟:逐位刷新,只重画发生变化的那一位(其余不动)
         {
@@ -239,12 +256,11 @@ void dashboard_run(void) {
             }
             strcpy(last_clock, cur_clock);
         }
-        // 日期 / 温度 / 天气描述 / 城市 —— 各自内容变了才重画
+        // 日期 / 天气(一行) / 城市 —— 各自内容变了才重画
         if (strcmp(cur_date, last_date)) { draw_center(Y_DATE, cur_date, COL_DATE, BG, S_DATE); strcpy(last_date, cur_date); }
-        if (cur_temp[0] && strcmp(cur_temp, last_temp)) { draw_temp(Y_TEMP, cur_temp, S_TEMP, COL_TEMP); strcpy(last_temp, cur_temp); }
-        if (cur_cond[0] && strcmp(cur_cond, last_cond)) { draw_center(Y_COND, cur_cond, COL_COND, BG, S_COND); strcpy(last_cond, cur_cond); }
+        if (cur_wx[0] && strcmp(cur_wx, last_wx)) { draw_weather(Y_WX, cur_temp, cur_cond, S_WX, COL_WX); strcpy(last_wx, cur_wx); }
         if (g_cfg.city[0] && strcmp(g_cfg.city, last_city)) { draw_center(Y_CITY, g_cfg.city, COL_CITY, BG, S_CITY); strcpy(last_city, g_cfg.city); }
-        if (g_ip[0] && strcmp(g_ip, last_ip))               { draw_center(Y_IP, g_ip, COL_IP, BG, S_IP); strcpy(last_ip, g_ip); }
+        if (g_ip[0] && strcmp(g_ip, last_ip))               { draw_left_line(Y_IP, g_ip, COL_IP, S_IP, IP_CLEAR_W); strcpy(last_ip, g_ip); }
 
         vTaskDelay(pdMS_TO_TICKS(1000));
     }

@@ -57,7 +57,7 @@ void display_init(void) {
     CMD(0x11); vTaskDelay(pdMS_TO_TICKS(130));       // SLPOUT
     CMD(0x3A); DAT1(0x55);                            // COLMOD 16bpp
     CMD(0x36); DAT1(0x60);                            // MADCTL MV+MX (横屏320x240, RGB)
-    CMD(0x20);                                        // INVOFF(不反相,确定性)
+    CMD(0x21);                                        // INVON(本面板需反相,黑底才是黑)
     CMD(0x29); vTaskDelay(pdMS_TO_TICKS(20));         // DISPON
     ESP_LOGI(T, "display init done");
 }
@@ -109,6 +109,37 @@ int draw_text(int x, int y, const char *s, uint16_t fg, uint16_t bg, int scale) 
 int text_width(const char *s, int scale) {
     int n = (int)strlen(s);
     return n>0 ? n*(8*scale+scale) - scale : 0;
+}
+
+// 画 1px 直线(Bresenham)
+void draw_line(int x0, int y0, int x1, int y1, uint16_t color) {
+    int dx = x1>x0 ? x1-x0 : x0-x1, sx = x0<x1 ? 1 : -1;
+    int dy = y1>y0 ? y0-y1 : y1-y0, sy = y0<y1 ? 1 : -1;   // dy 为负
+    int err = dx + dy, e2;
+    while (1) {
+        fill_rect(x0, y0, 1, 1, color);
+        if (x0==x1 && y0==y1) break;
+        e2 = 2*err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+// 画 1bpp 位图(行优先,每行 (w+7)/8 字节,MSB 优先):1=fg,0=bg
+void draw_bitmap(int x, int y, int w, int h, const uint8_t *bits, uint16_t fg, uint16_t bg) {
+    if (x<0||y<0||x+w>DISP_W||y+h>DISP_H) return;
+    int stride = (w+7)/8;
+    uint16_t cf = comp(fg), cb = comp(bg);
+    static uint8_t line[DISP_W*2];
+    set_window(x, y, w, h);
+    for (int r=0; r<h; r++) {
+        const uint8_t *row = bits + r*stride;
+        for (int c=0; c<w; c++) {
+            uint16_t v = ((row[c>>3] >> (7-(c&7))) & 1) ? cf : cb;
+            line[2*c] = v>>8; line[2*c+1] = v&0xFF;
+        }
+        DATN(line, w*2);
+    }
 }
 
 int display_width(void)  { return DISP_W; }

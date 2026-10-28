@@ -10,6 +10,7 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_ota_ops.h"
+#include "esp_app_desc.h"
 #include "netcfg.h"
 #include "lovebox_config.h"
 
@@ -95,10 +96,10 @@ static esp_err_t root_get(httpd_req_t *req) {
         "input,select{width:100%%;box-sizing:border-box;padding:10px;font-size:16px;border:1px solid #444;border-radius:8px;background:#1c1c1c;color:#fff}"
         "button{margin-top:22px;width:100%%;padding:13px;font-size:16px;border:0;border-radius:8px;background:#2d7;color:#000;font-weight:600}"
         ".hint{font-size:12px;color:#777;margin-top:4px}</style></head><body>"
-        "<h2>Lovebox 设置</h2><form method=POST action=/save>"
+        "<h2>Lovebox 设置</h2><p class=hint>固件版本 %s</p><form method=POST action=/save>"
         "<label>Wi-Fi 名称 (SSID)</label>"
         "<input name=ssid list=aps value=\"%s\" autocomplete=off>"
-        "<datalist id=aps>", g_cfg.ssid);
+        "<datalist id=aps>", esp_app_get_description()->version, g_cfg.ssid);
     for (int i = 0; i < ap_num && n < (int)sizeof(html)-300; i++)
         n += snprintf(html+n, sizeof(html)-n, "<option value=\"%s\">", (char*)aps[i].ssid);
     n += snprintf(html+n, sizeof(html)-n,
@@ -162,6 +163,8 @@ static esp_err_t save_post(httpd_req_t *req) {
 
 // ---------- 浏览器上传固件(OTA over HTTP upload)----------
 static esp_err_t ota_post(httpd_req_t *req) {
+    // 用户手动上传视为明确意图:先确认当前固件有效,避免 pending-verify 窗口拒绝新 OTA
+    esp_ota_mark_app_valid_cancel_rollback();
     const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
     if (!part) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no ota part"); return ESP_FAIL; }
     esp_ota_handle_t oh;
