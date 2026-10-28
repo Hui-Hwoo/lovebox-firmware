@@ -115,10 +115,17 @@ static esp_err_t root_get(httpd_req_t *req) {
         "</form>"
         "<hr style='border-color:#333;margin:28px 0'>"
         "<h2>固件更新</h2>"
+        "<button type=button onclick='chk()' style='background:#2d7;color:#000'>立即检查 GitHub 更新</button>"
+        "<p class=hint>最近检查:<span id=os>%s</span></p>"
+        "<p class=hint>从文件上传(离线):</p>"
         "<input type=file id=fw accept='.bin'>"
         "<button type=button onclick='up()' style='background:#58f;color:#fff'>上传并更新</button>"
         "<p id=st class=hint></p>"
         "<script>"
+        "async function chk(){var o=document.getElementById('os');o.textContent='检查中…';"
+        "try{await fetch('/checkupdate',{method:'POST'});"
+        "o.textContent='已触发,有新版会自动升级并重启。几秒后刷新本页看结果/版本号。';}"
+        "catch(e){o.textContent='设备可能正在升级重启…';}}"
         "async function up(){var f=document.getElementById('fw').files[0];var s=document.getElementById('st');"
         "if(!f){s.textContent='请先选择 firmware.bin';return;}"
         "s.textContent='上传中,请勿断电…';"
@@ -129,13 +136,21 @@ static esp_err_t root_get(httpd_req_t *req) {
         "</body></html>",
         g_cfg.city,
         g_cfg.unit=='F' ? " selected" : "",
-        g_cfg.unit=='C' ? " selected" : "");
+        g_cfg.unit=='C' ? " selected" : "",
+        g_ota_status);
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_send(req, html, n);
     return ESP_OK;
 }
 
-static void reboot_task(void *a) { vTaskDelay(pdMS_TO_TICKS(1500)); esp_restart(); }
+static void reboot_task(void *a) { vTaskDelay(pdMS_TO_TICKS(800)); motor_spin(3); esp_restart(); }  // 升级完成转3下
+
+// 网页"立即检查 GitHub 更新"
+static esp_err_t checkupdate_post(httpd_req_t *req) {
+    trigger_update_check();
+    httpd_resp_sendstr(req, "checking");
+    return ESP_OK;
+}
 
 static esp_err_t save_post(httpd_req_t *req) {
     static char body[1024];
@@ -165,6 +180,7 @@ static esp_err_t save_post(httpd_req_t *req) {
 static esp_err_t ota_post(httpd_req_t *req) {
     // 用户手动上传视为明确意图:先确认当前固件有效,避免 pending-verify 窗口拒绝新 OTA
     esp_ota_mark_app_valid_cancel_rollback();
+    motor_spin(1);                               // 升级开始:转1下
     const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
     if (!part) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no ota part"); return ESP_FAIL; }
     esp_ota_handle_t oh;
@@ -199,8 +215,10 @@ void netcfg_start_web(void) {
     httpd_uri_t u_root = { .uri="/", .method=HTTP_GET, .handler=root_get };
     httpd_uri_t u_save = { .uri="/save", .method=HTTP_POST, .handler=save_post };
     httpd_uri_t u_ota  = { .uri="/ota", .method=HTTP_POST, .handler=ota_post };
+    httpd_uri_t u_chk  = { .uri="/checkupdate", .method=HTTP_POST, .handler=checkupdate_post };
     httpd_register_uri_handler(srv, &u_root);
     httpd_register_uri_handler(srv, &u_save);
     httpd_register_uri_handler(srv, &u_ota);
-    ESP_LOGI(T, "设置网页已启动(:80),含固件上传 /ota");
+    httpd_register_uri_handler(srv, &u_chk);
+    ESP_LOGI(T, "设置网页已启动(:80),含固件上传 /ota 与检查更新 /checkupdate");
 }

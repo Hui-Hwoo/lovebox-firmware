@@ -13,6 +13,7 @@
 #include "esp_sntp.h"
 #include "esp_netif_sntp.h"
 #include "cJSON.h"
+#include "esp_app_desc.h"
 #include "display.h"
 #include "netcfg.h"
 #include "claude_icon.h"
@@ -139,8 +140,11 @@ static void draw_center(int y, const char *s, uint16_t fg, uint16_t bg, int scal
 #define S_WX     3
 #define Y_CITY   180
 #define S_CITY   2
-#define Y_IP     218          // 底部小字:设备 IP(只占左侧,避开右下角图标)
+#define Y_IP     206          // 设备 IP(只占左侧,避开右下角图标)
 #define S_IP     1
+#define Y_VER    226          // 版本号(左下角常驻)
+#define S_VER    1
+#define COL_VER  GRAY(95)
 #define IP_CLEAR_W 266        // IP 行清除宽度(右侧留给 Claude 图标)
 #define ICON_X   (320 - CLAUDE_ICON_W - 2)   // 右下角
 #define ICON_Y   (240 - CLAUDE_ICON_H - 2)
@@ -212,7 +216,7 @@ void dashboard_run(void) {
     char cur_wx[40] = "",    last_wx[40] = "";
     char last_city[40] = "";
     char last_ip[16] = "";
-    bool div_drawn = false, icon_drawn = false;
+    bool div_drawn = false, icon_drawn = false, ver_drawn = false;
     int  last_wfetch = -1000;   // 分钟计数,用于每15分钟刷新天气
 
     // 等首次对时(最多30秒),期间保持提示
@@ -241,6 +245,8 @@ void dashboard_run(void) {
         // 分隔线 + Claude 图标(静态,各画一次)
         if (!div_drawn) { fill_rect(60, Y_DIV, display_width()-120, 2, COL_DIV); div_drawn = true; }
         if (!icon_drawn) { draw_bitmap(ICON_X, ICON_Y, CLAUDE_ICON_W, CLAUDE_ICON_H, claude_icon_bits, C_CLAUDE, BG); icon_drawn = true; }
+        if (!ver_drawn)  { char vs[40]; snprintf(vs, sizeof(vs), "v%s", esp_app_get_description()->version);
+                           draw_text(3, Y_VER, vs, COL_VER, BG, S_VER); ver_drawn = true; }
 
         // 时钟:逐位刷新,只重画发生变化的那一位(其余不动)
         {

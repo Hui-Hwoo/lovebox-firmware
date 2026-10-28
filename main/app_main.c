@@ -15,6 +15,7 @@
 #include "esp_ota_ops.h"
 #include "esp_app_desc.h"
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "driver/gpio.h"
 #include "lovebox_config.h"
 #include "netcfg.h"
@@ -29,8 +30,23 @@
 
 static const char *TAG = "lovebox";
 static EventGroupHandle_t s_eg;
-#define WIFI_OK   BIT0
+#define WIFI_OK    BIT0
+#define CHECK_NOW  BIT1          // 网页"立即检查更新"触发
 static int s_retry = 0;
+
+char g_ota_status[80] = "尚未检查";   // 最近一次 GitHub 检查结果(供网页显示)
+
+// 电机转动反馈(GPIO32 高电平转):升级开始转1下,完成转3下
+void motor_spin(int times) {
+    gpio_reset_pin(32); gpio_set_direction(32, GPIO_MODE_OUTPUT);
+    for (int i = 0; i < times; i++) {
+        gpio_set_level(32, 1); vTaskDelay(pdMS_TO_TICKS(300));
+        gpio_set_level(32, 0); vTaskDelay(pdMS_TO_TICKS(260));
+    }
+}
+
+// 供网页端触发立即检查
+void trigger_update_check(void) { if (s_eg) xEventGroupSetBits(s_eg, CHECK_NOW); }
 
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data) {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) esp_wifi_connect();
@@ -100,10 +116,11 @@ static void ota_task(void *arg) {
         const esp_app_desc_t *cd = esp_app_get_description();
         if (strcmp(nd.version, cd->version) == 0) { esp_https_ota_abort(h); continue; }
         ESP_LOGI(TAG, "OTA 新版本 %s -> %s", cd->version, nd.version);
+        motor_spin(1);                               // 升级开始:转1下
         esp_err_t r;
         while ((r = esp_https_ota_perform(h)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS) { }
         if (r == ESP_OK && esp_https_ota_is_complete_data_received(h) && esp_https_ota_finish(h) == ESP_OK) {
-            ESP_LOGI(TAG, "OTA 成功,重启"); esp_restart();
+            ESP_LOGI(TAG, "OTA 成功,重启"); motor_spin(3); esp_restart();   // 完成:转3下
         } else { ESP_LOGE(TAG, "OTA 失败 r=%d", r); esp_https_ota_abort(h); }
     }
 }
@@ -117,33 +134,84 @@ static bool ver_newer(const char *r, const char *l) {
     return false;
 }
 
-// GitHub HTTPS 自动更新:开机60s先查一次,之后每2小时。只在远端版本更新时升级,尽力而为。
-static void github_ota_task(void *arg) {
-    vTaskDelay(pdMS_TO_TICKS(120000));   // 开机120s后再查(越过90s健康确认窗口)
-    while (1) {
-        if (xEventGroupGetBits(s_eg) & WIFI_OK) {
-            esp_http_client_config_t hc = {
-                .url = GH_OTA_URL, .timeout_ms = 25000, .keep_alive_enable = true,
-                .crt_bundle_attach = esp_crt_bundle_attach, .max_redirection_count = 10,
-            };
-            esp_https_ota_config_t oc = { .http_config = &hc };
-            esp_https_ota_handle_t h = NULL;
-            if (esp_https_ota_begin(&oc, &h) == ESP_OK && h) {
-                esp_app_desc_t nd;
-                if (esp_https_ota_get_img_desc(h, &nd) == ESP_OK) {
-                    const esp_app_desc_t *cd = esp_app_get_description();
-                    if (ver_newer(nd.version, cd->version)) {
-                        ESP_LOGI(TAG, "GitHub OTA %s -> %s", cd->version, nd.version);
-                        esp_err_t r;
-                        while ((r = esp_https_ota_perform(h)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS) { }
-                        if (r == ESP_OK && esp_https_ota_is_complete_data_received(h) && esp_https_ota_finish(h) == ESP_OK) {
-                            ESP_LOGI(TAG, "GitHub OTA 成功,重启"); esp_restart();
-                        } else { ESP_LOGE(TAG, "GitHub OTA 失败 r=%d", r); esp_https_ota_abort(h); }
-                    } else esp_https_ota_abort(h);
-                } else esp_https_ota_abort(h);
-            } else ESP_LOGD(TAG, "GitHub OTA: 无法连接/无新版本");
+// 用 GitHub API 查最新版本号(直连 HTTPS,无重定向,小响应,易诊断)
+#define GH_API_URL "https://api.github.com/repos/Hui-Hwoo/lovebox-firmware/releases/latest"
+static bool gh_latest_version(char *out, int outlen) {
+    static char buf[2560];
+    esp_http_client_config_t c = { .url = GH_API_URL, .crt_bundle_attach = esp_crt_bundle_attach,
+                                   .timeout_ms = 20000, .user_agent = "lovebox-esp32" };
+    esp_http_client_handle_t h = esp_http_client_init(&c);
+    esp_err_t err = esp_http_client_open(h, 0);
+    if (err != ESP_OK) { snprintf(g_ota_status, sizeof(g_ota_status), "API连接失败 0x%x", err); esp_http_client_cleanup(h); return false; }
+    esp_http_client_fetch_headers(h);
+    int sc = esp_http_client_get_status_code(h);
+    int n = esp_http_client_read_response(h, buf, sizeof(buf)-1);
+    buf[n > 0 ? n : 0] = 0;
+    esp_http_client_close(h); esp_http_client_cleanup(h);
+    if (sc != 200) { snprintf(g_ota_status, sizeof(g_ota_status), "API状态码 %d", sc); return false; }
+    char *p = strstr(buf, "\"tag_name\"");
+    if (!p) { snprintf(g_ota_status, sizeof(g_ota_status), "解析tag失败"); return false; }
+    p = strchr(p, ':'); if (p) p = strchr(p, '"'); if (!p) return false; p++;
+    char *q = strchr(p, '"'); if (!q) return false; *q = 0;
+    if (*p == 'v') p++;
+    strncpy(out, p, outlen-1); out[outlen-1] = 0;
+    return true;
+}
+
+// 用 esp_http_client(自动跟随重定向)把固件流式写入 OTA 分区
+static esp_ota_handle_t s_dl_oh;
+static const esp_partition_t *s_dl_part;
+static int s_dl_total;
+static esp_err_t gh_dl_evt(esp_http_client_event_t *e) {
+    if (e->event_id == HTTP_EVENT_ON_DATA) {
+        if (esp_http_client_get_status_code(e->client) == 200) {   // 只写最终200响应体,忽略重定向
+            if (!s_dl_oh) {
+                s_dl_part = esp_ota_get_next_update_partition(NULL);
+                if (!s_dl_part || esp_ota_begin(s_dl_part, OTA_SIZE_UNKNOWN, &s_dl_oh) != ESP_OK) { s_dl_oh = NULL; return ESP_FAIL; }
+            }
+            if (esp_ota_write(s_dl_oh, e->data, e->data_len) != ESP_OK) return ESP_FAIL;
+            s_dl_total += e->data_len;
         }
-        vTaskDelay(pdMS_TO_TICKS(GH_POLL_S * 1000));
+    }
+    return ESP_OK;
+}
+
+// 执行一次 GitHub 检查:有新版则下载升级(开始转1下、完成转3下并重启),结果写入 g_ota_status
+static void do_github_check(void) {
+    if (!(xEventGroupGetBits(s_eg) & WIFI_OK)) { snprintf(g_ota_status, sizeof(g_ota_status), "无网络,跳过"); return; }
+    char rv[32];
+    if (!gh_latest_version(rv, sizeof(rv))) return;       // g_ota_status 已含错误原因
+    const char *cv = esp_app_get_description()->version;
+    if (!ver_newer(rv, cv)) { snprintf(g_ota_status, sizeof(g_ota_status), "已是最新 (%s)", cv); ESP_LOGI(TAG, "GitHub: %s", g_ota_status); return; }
+
+    ESP_LOGI(TAG, "GitHub OTA %s -> %s", cv, rv);
+    snprintf(g_ota_status, sizeof(g_ota_status), "升级中 %s -> %s", cv, rv);
+    motor_spin(1);                                        // 升级开始:转1下
+    s_dl_oh = NULL; s_dl_part = NULL; s_dl_total = 0;
+    esp_http_client_config_t dc = { .url = GH_OTA_URL, .crt_bundle_attach = esp_crt_bundle_attach,
+        .timeout_ms = 30000, .user_agent = "lovebox-esp32", .event_handler = gh_dl_evt,
+        .buffer_size = 4096, .max_redirection_count = 10, .keep_alive_enable = true };
+    esp_http_client_handle_t dcl = esp_http_client_init(&dc);
+    esp_err_t de = esp_http_client_perform(dcl);
+    int dsc = esp_http_client_get_status_code(dcl);
+    esp_http_client_cleanup(dcl);
+    if (de == ESP_OK && dsc == 200 && s_dl_oh && s_dl_total > 100000 &&
+        esp_ota_end(s_dl_oh) == ESP_OK && esp_ota_set_boot_partition(s_dl_part) == ESP_OK) {
+        ESP_LOGI(TAG, "GitHub OTA 成功(%d字节),重启", s_dl_total); motor_spin(3); esp_restart();
+    } else {
+        if (s_dl_oh) esp_ota_abort(s_dl_oh);
+        snprintf(g_ota_status, sizeof(g_ota_status), "下载失败 err=0x%x sc=%d n=%d", de, dsc, s_dl_total);
+        ESP_LOGE(TAG, "%s", g_ota_status);
+    }
+}
+
+// GitHub 自动更新:开机120s后首查,之后每5分钟,或被网页"立即检查"触发
+static void github_ota_task(void *arg) {
+    vTaskDelay(pdMS_TO_TICKS(120000));   // 越过90s健康确认窗口
+    while (1) {
+        do_github_check();
+        // 等 5 分钟,或被手动触发(清除标志)提前唤醒
+        xEventGroupWaitBits(s_eg, CHECK_NOW, pdTRUE, pdFALSE, pdMS_TO_TICKS(GH_POLL_S * 1000));
     }
 }
 
