@@ -186,6 +186,14 @@ static void draw_left_line(int y, const char *s, uint16_t fg, int scale, int cle
     draw_text(x, y, s, fg, BG, scale);
 }
 
+// 开机即点屏的启动画面(在连 Wi-Fi 之前调用,避免黑屏等待)
+void dashboard_splash(void) {
+    display_init();                    // 点亮背光 + 初始化(可重复调用)
+    fill_screen(C_BLACK);
+    draw_center(70,  "LOVEBOX", 0xFFFF, C_BLACK, 5);
+    draw_center(140, "starting...", GRAY(140), C_BLACK, 2);
+}
+
 // 配网模式提示屏(连不上已存 Wi-Fi 时)
 void dashboard_setup_screen(void) {
     display_init();

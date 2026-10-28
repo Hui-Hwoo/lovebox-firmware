@@ -44,6 +44,9 @@ static void set_window(int x, int y, int w, int h) {
 }
 
 void display_init(void) {
+    static bool s_inited = false;
+    if (s_inited) return;              // 可重复调用:已初始化则跳过(SPI 只初始化一次)
+    s_inited = true;
     gpio_reset_pin(PIN_BL);  gpio_set_direction(PIN_BL, GPIO_MODE_OUTPUT);  gpio_set_level(PIN_BL, 1);
     gpio_reset_pin(PIN_DC);  gpio_set_direction(PIN_DC, GPIO_MODE_OUTPUT);
     gpio_reset_pin(PIN_RST); gpio_set_direction(PIN_RST, GPIO_MODE_OUTPUT);

@@ -67,10 +67,19 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
 
 static esp_netif_t *s_sta_netif, *s_ap_netif;
 
-// APSTA 常驻:连家里 Wi-Fi(STA)的同时,一直广播 Lovebox-Setup 热点(AP)
+static void ap_config_fill(wifi_config_t *ap, uint8_t channel) {
+    memset(ap, 0, sizeof(*ap));
+    strncpy((char*)ap->ap.ssid, AP_SSID, sizeof(ap->ap.ssid)-1);
+    ap->ap.ssid_len = strlen(AP_SSID);
+    strncpy((char*)ap->ap.password, AP_PASS, sizeof(ap->ap.password)-1);
+    ap->ap.channel = channel;
+    ap->ap.max_connection = 4;
+    ap->ap.authmode = WIFI_AUTH_WPA2_PSK;
+}
+
+// 开机:只开 STA,专心连家里网(不开热点,避免单天线信道冲突)
 static void wifi_start(void) {
     s_sta_netif = esp_netif_create_default_wifi_sta();
-    s_ap_netif  = esp_netif_create_default_wifi_ap();
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL));
@@ -78,26 +87,37 @@ static void wifi_start(void) {
     wifi_config_t sta = { 0 };
     strncpy((char*)sta.sta.ssid, g_cfg.ssid, sizeof(sta.sta.ssid)-1);
     strncpy((char*)sta.sta.password, g_cfg.pass, sizeof(sta.sta.password)-1);
-    wifi_config_t ap = { 0 };
-    strncpy((char*)ap.ap.ssid, AP_SSID, sizeof(ap.ap.ssid)-1);
-    ap.ap.ssid_len = strlen(AP_SSID);
-    strncpy((char*)ap.ap.password, AP_PASS, sizeof(ap.ap.password)-1);
-    ap.ap.channel = 1;
-    ap.ap.max_connection = 4;
-    ap.ap.authmode = WIFI_AUTH_WPA2_PSK;      // 带密码,防陌生人
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap));
     ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_LOGI(TAG, "APSTA 启动:连接 %s,并常驻热点 %s(192.168.4.1)", g_cfg.ssid, AP_SSID);
+    ESP_LOGI(TAG, "STA 启动,连接 %s", g_cfg.ssid);
 }
 
-// 若开机 90s 没连上家里网(进了配网屏),后台一旦连上就重启回正常仪表盘
-static void wifi_watch_task(void *arg) {
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(5000));
-        if (xEventGroupGetBits(s_eg) & WIFI_OK) { ESP_LOGI(TAG, "家里 Wi-Fi 已恢复,重启回正常模式"); esp_restart(); }
-    }
+// 已连上家里网后:把常驻热点开在"家里网同一信道"上(无冲突,STA 连接不受影响)
+static void wifi_enable_ap(void) {
+    if (!s_ap_netif) s_ap_netif = esp_netif_create_default_wifi_ap();
+    uint8_t ch = 1; wifi_second_chan_t sec;
+    if (esp_wifi_get_channel(&ch, &sec) != ESP_OK || ch == 0) ch = 1;
+    wifi_config_t ap; ap_config_fill(&ap, ch);
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap));
+    ESP_LOGI(TAG, "常驻热点 %s 已开(信道%d,跟随家里网)", AP_SSID, ch);
+}
+
+// 连不上家里网:用纯 AP 配网(不占信道挡 STA),并定时重启重试 STA
+static void wifi_setup_ap_only(void) {
+    if (!s_ap_netif) s_ap_netif = esp_netif_create_default_wifi_ap();
+    wifi_config_t ap; ap_config_fill(&ap, 1);
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap));
+    ESP_LOGW(TAG, "配网模式:纯热点 %s (192.168.4.1)", AP_SSID);
+}
+
+// 配网模式下定时重启:每次开机都是"STA优先",干净地重试家里网 -> 自动恢复
+static void setup_retry_task(void *arg) {
+    vTaskDelay(pdMS_TO_TICKS(5*60*1000));
+    ESP_LOGW(TAG, "配网模式5分钟,重启重试连接家里网");
+    esp_restart();
 }
 
 // ---------- OTA 自更新:尽力而为,Mac 不在就跳过,绝不致命 ----------
@@ -242,28 +262,33 @@ void app_main(void) {
     const esp_partition_t *run = esp_ota_get_running_partition();
     ESP_LOGI(TAG, "启动 v2。运行分区=%s", run ? run->label : "?");
 
+    // 一上电就点屏显示启动画面(不再黑屏等 Wi-Fi)
+    extern void dashboard_splash(void);
+    dashboard_splash();
+
     // 健康确认计时器:稳定跑满90s才标记有效;期间若崩溃则引导器自动回滚到上个好版本
     xTaskCreate(health_task, "health", 3072, NULL, 7, NULL);
 
-    wifi_start();   // APSTA:连家里网 + 常驻 Lovebox-Setup 热点
+    wifi_start();   // 先只开 STA 专心连家里网
     // 给家里 Wi-Fi 充足时间(90s),期间持续重试,绝不因一时慢就放弃
     EventBits_t bits = xEventGroupWaitBits(s_eg, WIFI_OK, pdFALSE, pdFALSE, pdMS_TO_TICKS(90000));
 
     extern void dashboard_run(void);
     extern void dashboard_setup_screen(void);
 
-    // 设置网页始终开启(STA 的 IP 和 热点 192.168.4.1 都能访问)
-    netcfg_start_web();
-
     if (bits & WIFI_OK) {
+        wifi_enable_ap();                 // 连上后再开常驻热点(同信道,不冲突)
+        netcfg_start_web();               // 设置页:http://<STA IP> 和 http://192.168.4.1 都可访问
         xTaskCreate(ota_task, "ota", 8192, NULL, 5, NULL);          // 局域网 OTA(Mac 在才生效)
         xTaskCreate(github_ota_task, "ghota", 9216, NULL, 5, NULL); // GitHub HTTPS 自动更新(5分钟)
         xTaskCreate((TaskFunction_t)dashboard_run, "dash", 10240, NULL, 4, NULL);
         ESP_LOGI(TAG, "就绪:仪表盘运行,设置页 http://%s 或 http://192.168.4.1", g_ip);
     } else {
-        // 90s 还没连上家里网 -> 显示配网屏;热点已常驻,STA 后台继续试,连上自动重启回正常
+        // 90s 没连上 -> 纯 AP 配网(不挡 STA),5分钟后重启重试(STA优先,自动恢复)
+        wifi_setup_ap_only();
+        netcfg_start_web();
         xTaskCreate((TaskFunction_t)dashboard_setup_screen, "setup", 8192, NULL, 4, NULL);
-        xTaskCreate(wifi_watch_task, "wifiwatch", 3072, NULL, 6, NULL);
-        ESP_LOGW(TAG, "未连上家里网,显示配网屏:连 %s -> 打开 192.168.4.1(后台仍在试)", AP_SSID);
+        xTaskCreate(setup_retry_task, "setupretry", 3072, NULL, 6, NULL);
+        ESP_LOGW(TAG, "未连上家里网,配网屏:连 %s -> 打开 192.168.4.1(5分钟后自动重试)", AP_SSID);
     }
 }
