@@ -158,22 +158,37 @@ static bool gh_latest_version(char *out, int outlen) {
     return true;
 }
 
-// 用 esp_http_client(自动跟随重定向)把固件流式写入 OTA 分区
-static esp_ota_handle_t s_dl_oh;
-static const esp_partition_t *s_dl_part;
-static int s_dl_total;
-static esp_err_t gh_dl_evt(esp_http_client_event_t *e) {
-    if (e->event_id == HTTP_EVENT_ON_DATA) {
-        if (esp_http_client_get_status_code(e->client) == 200) {   // 只写最终200响应体,忽略重定向
-            if (!s_dl_oh) {
-                s_dl_part = esp_ota_get_next_update_partition(NULL);
-                if (!s_dl_part || esp_ota_begin(s_dl_part, OTA_SIZE_UNKNOWN, &s_dl_oh) != ESP_OK) { s_dl_oh = NULL; return ESP_FAIL; }
-            }
-            if (esp_ota_write(s_dl_oh, e->data, e->data_len) != ESP_OK) return ESP_FAIL;
-            s_dl_total += e->data_len;
-        }
+// 手动跟随重定向下载固件并写入 OTA 分区(github.com -> githubusercontent CDN)
+static void gh_download_and_flash(void) {
+    esp_http_client_config_t c = { .url = GH_OTA_URL, .crt_bundle_attach = esp_crt_bundle_attach,
+        .timeout_ms = 30000, .user_agent = "lovebox-esp32", .buffer_size = 4096, .buffer_size_tx = 2048,
+        .disable_auto_redirect = true };
+    esp_http_client_handle_t cl = esp_http_client_init(&c);
+    esp_err_t err = esp_http_client_open(cl, 0);
+    if (err != ESP_OK) { snprintf(g_ota_status, sizeof(g_ota_status), "下载连接失败 0x%x", err); esp_http_client_cleanup(cl); return; }
+    esp_http_client_fetch_headers(cl);
+    int sc = esp_http_client_get_status_code(cl), redir = 0;
+    while ((sc==301||sc==302||sc==303||sc==307||sc==308) && redir++ < 6) {
+        esp_http_client_set_redirection(cl);                 // 从 Location 更新 URL
+        err = esp_http_client_open(cl, 0);
+        if (err != ESP_OK) { snprintf(g_ota_status, sizeof(g_ota_status), "跳转%d连接失败 0x%x", redir, err); esp_http_client_cleanup(cl); return; }
+        esp_http_client_fetch_headers(cl);
+        sc = esp_http_client_get_status_code(cl);
     }
-    return ESP_OK;
+    if (sc != 200) { snprintf(g_ota_status, sizeof(g_ota_status), "下载状态码 %d (跳转%d次)", sc, redir); esp_http_client_cleanup(cl); return; }
+    const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
+    esp_ota_handle_t oh;
+    if (!part || esp_ota_begin(part, OTA_SIZE_UNKNOWN, &oh) != ESP_OK) { snprintf(g_ota_status, sizeof(g_ota_status), "OTA begin失败"); esp_http_client_cleanup(cl); return; }
+    static char buf[4096]; int total = 0, r;
+    while ((r = esp_http_client_read(cl, buf, sizeof(buf))) > 0) {
+        if (esp_ota_write(oh, buf, r) != ESP_OK) { esp_ota_abort(oh); esp_http_client_cleanup(cl); snprintf(g_ota_status, sizeof(g_ota_status), "写入失败 @%d", total); return; }
+        total += r;
+    }
+    esp_http_client_close(cl); esp_http_client_cleanup(cl);
+    if (total < 100000) { esp_ota_abort(oh); snprintf(g_ota_status, sizeof(g_ota_status), "下载不完整 n=%d", total); return; }
+    if (esp_ota_end(oh) != ESP_OK) { snprintf(g_ota_status, sizeof(g_ota_status), "校验失败 n=%d", total); return; }
+    if (esp_ota_set_boot_partition(part) != ESP_OK) { snprintf(g_ota_status, sizeof(g_ota_status), "设置启动分区失败"); return; }
+    ESP_LOGI(TAG, "GitHub OTA 成功 %d 字节,重启", total); motor_spin(3); esp_restart();
 }
 
 // 执行一次 GitHub 检查:有新版则下载升级(开始转1下、完成转3下并重启),结果写入 g_ota_status
@@ -187,22 +202,7 @@ static void do_github_check(void) {
     ESP_LOGI(TAG, "GitHub OTA %s -> %s", cv, rv);
     snprintf(g_ota_status, sizeof(g_ota_status), "升级中 %s -> %s", cv, rv);
     motor_spin(1);                                        // 升级开始:转1下
-    s_dl_oh = NULL; s_dl_part = NULL; s_dl_total = 0;
-    esp_http_client_config_t dc = { .url = GH_OTA_URL, .crt_bundle_attach = esp_crt_bundle_attach,
-        .timeout_ms = 30000, .user_agent = "lovebox-esp32", .event_handler = gh_dl_evt,
-        .buffer_size = 4096, .max_redirection_count = 10, .keep_alive_enable = true };
-    esp_http_client_handle_t dcl = esp_http_client_init(&dc);
-    esp_err_t de = esp_http_client_perform(dcl);
-    int dsc = esp_http_client_get_status_code(dcl);
-    esp_http_client_cleanup(dcl);
-    if (de == ESP_OK && dsc == 200 && s_dl_oh && s_dl_total > 100000 &&
-        esp_ota_end(s_dl_oh) == ESP_OK && esp_ota_set_boot_partition(s_dl_part) == ESP_OK) {
-        ESP_LOGI(TAG, "GitHub OTA 成功(%d字节),重启", s_dl_total); motor_spin(3); esp_restart();
-    } else {
-        if (s_dl_oh) esp_ota_abort(s_dl_oh);
-        snprintf(g_ota_status, sizeof(g_ota_status), "下载失败 err=0x%x sc=%d n=%d", de, dsc, s_dl_total);
-        ESP_LOGE(TAG, "%s", g_ota_status);
-    }
+    gh_download_and_flash();                              // 成功会重启;失败把原因写入 g_ota_status
 }
 
 // GitHub 自动更新:开机120s后首查,之后每5分钟,或被网页"立即检查"触发
