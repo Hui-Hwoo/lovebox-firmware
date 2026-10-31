@@ -24,18 +24,9 @@
     <div id="fields"></div>
     <button id="saveCfg" class="btn primary">保存设置</button>
     <div id="cfgMsg" class="msg"></div>
-
-    <hr>
-    <h3>固件更新</h3>
-    <button id="checkBtn" class="btn">检查 GitHub 更新</button>
-    <div class="hint">最近检查:<span id="otaStatus">—</span></div>
-    <label>从文件上传(离线)</label>
-    <input type="file" id="fw" accept=".bin">
-    <button id="uploadBtn" class="btn blue">上传并更新</button>
-    <div id="otaMsg" class="msg"></div>
   </section>
 
-  <!-- 右列:设备状态 -->
+  <!-- 右列:设备状态 + 固件更新 -->
   <section class="card">
     <h2>设备状态</h2>
     <dl class="status">
@@ -46,6 +37,15 @@
       <dt>Wi-Fi</dt><dd id="st-wifi">—</dd>
       <dt>运行时长</dt><dd id="st-up">—</dd>
     </dl>
+
+    <hr>
+    <h3>固件更新</h3>
+    <button id="checkBtn" class="btn">检查 GitHub 更新</button>
+    <div class="hint">最近检查:<span id="otaStatus">—</span></div>
+    <label>从文件上传(离线)</label>
+    <input type="file" id="fw" accept=".bin">
+    <button id="uploadBtn" class="btn blue">上传并更新</button>
+    <div id="otaMsg" class="msg"></div>
   </section>
 </main>
 
