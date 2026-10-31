@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AlgoStone</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">AlgoStone</div>
+  <button id="gear" class="icon-btn" title="系统设置">⚙️</button>
+</header>
+
+<main class="grid">
+  <!-- 左列:画面(选择 + 该画面字段 + 固件更新) -->
+  <section class="card">
+    <h2>画面</h2>
+    <label>当前显示画面(立即切换,无需重启)</label>
+    <select id="screen"></select>
+    <button id="applyScreen" class="btn primary">应用画面</button>
+    <div id="screenMsg" class="msg"></div>
+
+    <div id="fields"></div>
+    <button id="saveCfg" class="btn primary">保存设置</button>
+    <div id="cfgMsg" class="msg"></div>
+
+    <hr>
+    <h3>固件更新</h3>
+    <button id="checkBtn" class="btn">检查 GitHub 更新</button>
+    <div class="hint">最近检查:<span id="otaStatus">—</span></div>
+    <label>从文件上传(离线)</label>
+    <input type="file" id="fw" accept=".bin">
+    <button id="uploadBtn" class="btn blue">上传并更新</button>
+    <div id="otaMsg" class="msg"></div>
+  </section>
+
+  <!-- 右列:设备状态 -->
+  <section class="card">
+    <h2>设备状态</h2>
+    <dl class="status">
+      <dt>固件版本</dt><dd id="st-ver">—</dd>
+      <dt>编译时间</dt><dd id="st-build">—</dd>
+      <dt>运行分区</dt><dd id="st-part">—</dd>
+      <dt>IP 地址</dt><dd id="st-ip">—</dd>
+      <dt>Wi-Fi</dt><dd id="st-wifi">—</dd>
+      <dt>运行时长</dt><dd id="st-up">—</dd>
+    </dl>
+  </section>
+</main>
+
+<!-- 系统设置(Wi-Fi)模态框:齿轮打开 -->
+<div class="modal-backdrop" id="modal" hidden>
+  <div class="modal">
+    <div class="modal-head"><h2>系统设置</h2><button id="closeModal" class="icon-btn">✕</button></div>
+    <label>Wi-Fi 名称 (SSID)</label>
+    <input id="wifiSsid" autocomplete="off">
+    <label>Wi-Fi 密码</label>
+    <input id="wifiPass" type="password" placeholder="(留空则不修改)" autocomplete="off">
+    <button id="saveWifi" class="btn primary">保存并重启</button>
+    <div class="hint">改 Wi-Fi 需要重启设备才能生效。</div>
+    <div id="wifiMsg" class="msg"></div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

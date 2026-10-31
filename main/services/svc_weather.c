@@ -5,7 +5,6 @@
 #include "esp_http_client.h"
 #include "cJSON.h"
 #include "svc_weather.h"
-#include "netcfg.h"      // g_cfg.unit
 
 static const char *T = "svc_weather";
 
@@ -53,12 +52,12 @@ void svc_weather_geocode(const char *city) {
     cJSON_Delete(j);
 }
 
-void svc_weather_refresh(void) {
+void svc_weather_refresh(char unit) {
     static char url[256], buf[1536];
-    const char *unit = (g_cfg.unit == 'C') ? "celsius" : "fahrenheit";
+    const char *us = (unit == 'C') ? "celsius" : "fahrenheit";
     snprintf(url, sizeof(url),
         "http://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&current=temperature_2m,weather_code&temperature_unit=%s",
-        s_lat, s_lon, unit);
+        s_lat, s_lon, us);
     int n = http_get(url, buf, sizeof(buf));
     if (n <= 0) { ESP_LOGW(T, "天气请求失败"); return; }
     cJSON *j = cJSON_Parse(buf);
@@ -69,7 +68,7 @@ void svc_weather_refresh(void) {
         cJSON *w = cJSON_GetObjectItem(cur, "weather_code");
         if (cJSON_IsNumber(t)) s_wx.temp = (float)t->valuedouble;
         if (cJSON_IsNumber(w)) s_wx.wcode = w->valueint;
-        s_wx.unit = (g_cfg.unit == 'C') ? 'C' : 'F';
+        s_wx.unit = (unit == 'C') ? 'C' : 'F';
         s_wx.ok = true;
         ESP_LOGI(T, "天气: %.0f%c, code=%d", s_wx.temp, s_wx.unit, s_wx.wcode);
     }

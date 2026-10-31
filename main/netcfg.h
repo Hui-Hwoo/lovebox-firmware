@@ -1,12 +1,10 @@
 #pragma once
 #include <stdbool.h>
 
-// 持久化配置(存 NVS,可通过网页动态修改)
+// 系统级持久化配置(存 NVS)。画面各自的设置见 cfg_store(按画面命名空间)。
 typedef struct {
     char ssid[33];
     char pass[65];
-    char city[48];
-    char unit;         // 'F' 或 'C'
     char screen[16];   // 当前画面 id(如 "clockwx")
 } lb_cfg_t;
 

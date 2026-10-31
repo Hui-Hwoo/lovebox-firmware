@@ -10,11 +10,13 @@
 #include "display.h"
 #include "ui_draw.h"
 #include "netcfg.h"
+#include "cfg_store.h"
 #include "svc_time.h"
 #include "svc_weather.h"
 #include "claude_icon.h"
 #include "screen.h"
 
+#define NS "clockwx"          // 本画面的配置命名空间
 #define BG C_BLACK
 
 // 版面坐标(320x240)与字号/灰阶 —— 主次分层
@@ -93,9 +95,13 @@ static wx_t wmo_icon(int c) {
     return WX_CLOUD;
 }
 
+// ---------- 画面配置(切入时从 NVS 读取)----------
+static char s_city[48] = "San Francisco";
+static char s_unit = 'F';
+
 // 天气一行:温度 "<num>°<U>" + 天气图标,整体居中,固定布局(不随描述长短变化)
 static void draw_weather(int y, const char *num, int wcode, int scale, uint16_t col) {
-    char ul[2] = { (g_cfg.unit == 'C') ? 'C' : 'F', 0 };
+    char ul[2] = { (s_unit == 'C') ? 'C' : 'F', 0 };
     int W = display_width();
     int gap = scale, dd = scale * 2;
     int wnum = text_width(num, scale);
@@ -126,10 +132,19 @@ static void draw_left_line(int y, const char *s, uint16_t fg, int scale, int cle
 static char last_clock[8], last_date[24], last_wx[40], last_city[40], last_ip[16];
 static int  last_wfetch;
 
+// 从本画面的 NVS 命名空间读取配置(城市 / 单位)
+static void load_cfg(void) {
+    char u[8];
+    cfg_get(NS, "city", s_city, sizeof(s_city), "San Francisco");
+    cfg_get(NS, "unit", u, sizeof(u), "F");
+    s_unit = (u[0] == 'C') ? 'C' : 'F';
+}
+
 // ---------- screen_t 回调 ----------
 static void clockwx_prepare(void) {
-    svc_weather_geocode(g_cfg.city);   // 城市名 -> 坐标
-    svc_weather_refresh();             // 首次拉天气(切屏前备好,避免留白)
+    load_cfg();
+    svc_weather_geocode(s_city);       // 城市名 -> 坐标
+    svc_weather_refresh(s_unit);       // 首次拉天气(切屏前备好,避免留白)
 }
 
 static void clockwx_enter(void) {
@@ -158,7 +173,7 @@ static void clockwx_tick(void) {
     // 天气:每15分钟刷新一次
     int totmin = tm.tm_hour*60 + tm.tm_min;
     if (svc_time_ready() && (totmin - last_wfetch >= 15 || last_wfetch < -100)) {
-        svc_weather_refresh(); last_wfetch = totmin;
+        svc_weather_refresh(s_unit); last_wfetch = totmin;
     }
 
     weather_t wx; svc_weather_get(&wx);
@@ -189,15 +204,22 @@ static void clockwx_tick(void) {
     // 日期 / 天气(一行) / 城市 / IP —— 各自内容变了才重画
     if (strcmp(cur_date, last_date)) { ui_draw_center(Y_DATE, cur_date, COL_DATE, BG, S_DATE); strcpy(last_date, cur_date); }
     if (cur_wx[0] && strcmp(cur_wx, last_wx)) { draw_weather(Y_WX, cur_temp, wx.wcode, S_WX, COL_WX); strcpy(last_wx, cur_wx); }
-    if (g_cfg.city[0] && strcmp(g_cfg.city, last_city)) { ui_draw_center(Y_CITY, g_cfg.city, COL_CITY, BG, S_CITY); strcpy(last_city, g_cfg.city); }
+    if (s_city[0] && strcmp(s_city, last_city)) { ui_draw_center(Y_CITY, s_city, COL_CITY, BG, S_CITY); strcpy(last_city, s_city); }
     if (g_ip[0] && strcmp(g_ip, last_ip))               { draw_left_line(Y_IP, g_ip, COL_IP, S_IP, IP_CLEAR_W); strcpy(last_ip, g_ip); }
 }
 
+static const scr_field_t clockwx_fields[] = {
+    { .key = "city", .label = "城市(英文名)", .type = FLD_TEXT,   .def = "San Francisco" },
+    { .key = "unit", .label = "温度单位",       .type = FLD_SELECT, .def = "F", .options = "F:华氏 F,C:摄氏 C" },
+};
+
 const screen_t scr_clockwx = {
-    .id      = "clockwx",
-    .name    = "时钟+天气",
-    .prepare = clockwx_prepare,
-    .enter   = clockwx_enter,
-    .tick    = clockwx_tick,
-    .leave   = NULL,
+    .id       = "clockwx",
+    .name     = "时钟+天气",
+    .fields   = clockwx_fields,
+    .n_fields = sizeof(clockwx_fields)/sizeof(clockwx_fields[0]),
+    .prepare  = clockwx_prepare,
+    .enter    = clockwx_enter,
+    .tick     = clockwx_tick,
+    .leave    = NULL,
 };

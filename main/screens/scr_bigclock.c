@@ -52,10 +52,12 @@ static void bigclock_tick(void) {
 }
 
 const screen_t scr_bigclock = {
-    .id      = "bigclock",
-    .name    = "超大时钟",
-    .prepare = NULL,
-    .enter   = bigclock_enter,
-    .tick    = bigclock_tick,
-    .leave   = NULL,
+    .id       = "bigclock",
+    .name     = "超大时钟",
+    .fields   = NULL,
+    .n_fields = 0,
+    .prepare  = NULL,
+    .enter    = bigclock_enter,
+    .tick     = bigclock_tick,
+    .leave    = NULL,
 };

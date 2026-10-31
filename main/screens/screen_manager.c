@@ -22,8 +22,9 @@ static const screen_t *REG[] = {
 };
 #define N_SCREENS ((int)(sizeof(REG)/sizeof(REG[0])))
 
-static int s_cur  = 0;             // 当前画面下标
-static volatile int s_next = -1;   // 待切换目标下标(-1 表示无请求)
+static int s_cur  = 0;               // 当前画面下标
+static volatile int s_next = -1;     // 待切换目标下标(-1 表示无请求)
+static volatile bool s_reload = false; // 配置改动后请求重载当前画面
 
 int screen_manager_count(void) { return N_SCREENS; }
 const screen_t *screen_manager_get(int i) { return (i >= 0 && i < N_SCREENS) ? REG[i] : NULL; }
@@ -35,11 +36,18 @@ static int find_by_id(const char *id) {
     return -1;
 }
 
+const screen_t *screen_manager_find(const char *id) {
+    int i = find_by_id(id);
+    return i >= 0 ? REG[i] : NULL;
+}
+
 void screen_manager_select(const char *id) {
     int i = find_by_id(id);
     if (i < 0) { ESP_LOGW(T, "未知画面 id=%s,忽略", id ? id : "(null)"); return; }
     s_next = i;   // 由调度循环择机切换(不在 web 线程里直接操作屏幕)
 }
+
+void screen_manager_reload(void) { s_reload = true; }
 
 void screen_manager_run(void) {
     display_init();
@@ -83,6 +91,15 @@ void screen_manager_run(void) {
             ESP_LOGI(T, "切换画面 -> %s (%s)", REG[s_cur]->id, REG[s_cur]->name);
         } else if (nx >= 0) {
             s_next = -1;   // 请求的就是当前画面,忽略
+        }
+
+        // 配置改动:重载当前画面(重取数据 + 重绘),不切换画面
+        if (s_reload) {
+            s_reload = false;
+            if (REG[s_cur]->prepare) REG[s_cur]->prepare();
+            fill_screen(C_BLACK);
+            REG[s_cur]->enter();
+            ESP_LOGI(T, "重载画面: %s", REG[s_cur]->id);
         }
 
         REG[s_cur]->tick();
