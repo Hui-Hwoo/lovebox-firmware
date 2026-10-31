@@ -245,18 +245,32 @@ static void draw_left_line(int y, const char *s, uint16_t fg, int scale, int cle
 }
 
 // ---------- 启动页:品牌名 + 进度条 ----------
-#define SPLASH_TITLE_Y 80      // "AlgoStone" 大字(scale 3, 24px 高)
-#define PROG_Y     150         // 进度条/starting 文字的纵向位置
+#define SPLASH_TITLE_Y 88      // "AlgoStone" 大字(scale 4, 32px 高)
+#define SPLASH_SCALE   4
+#define SPLASH_STRIDE  34      // 字距(略小于字宽 32,让 9 个字母放得下更大的字)
+#define PROG_Y     140         // 进度条/starting 文字的纵向位置(靠近标题)
 #define PROG_H     16          // 进度条高度
 #define PROG_MGN   50          // 进度条左右留白
 static int s_prog = 0;         // 当前进度 0..100
+
+// 居中画标题,字距 stride 可调(stride < 字宽时更紧凑,能放下更大的字号)
+static void draw_title(int y, const char *s, uint16_t fg, int scale, int stride) {
+    int n = (int)strlen(s);
+    int span = (n > 0) ? (n - 1) * stride + 8*scale : 0;
+    int x = (display_width() - span) / 2;
+    if (x < 0) x = 0;
+    for (int i = 0; i < n; i++) {
+        char c[2] = { s[i], 0 };
+        draw_text(x + i*stride, y, c, fg, C_BLACK, scale);
+    }
+}
 
 // 开机即点屏的启动画面(在连 Wi-Fi 之前调用,避免黑屏等待)
 // 初始:AlgoStone + 下方 "starting"
 void dashboard_splash(void) {
     display_init();                    // 点亮背光 + 初始化(可重复调用)
     fill_screen(C_BLACK);
-    draw_center(SPLASH_TITLE_Y, "AlgoStone", 0xFFFF, C_BLACK, 3);
+    draw_title(SPLASH_TITLE_Y, "AlgoStone", 0xFFFF, SPLASH_SCALE, SPLASH_STRIDE);
     draw_center(PROG_Y, "starting", GRAY(140), C_BLACK, 2);
 }
 
@@ -277,7 +291,7 @@ static void progress_set(int pct) {
     int W = display_width();
     int x = PROG_MGN + 2, fullw = W - 2*PROG_MGN - 4;
     int w = fullw * pct / 100;
-    if (w > 0) fill_rect(x, PROG_Y + 2, w, PROG_H - 4, C_CLAUDE);  // 品牌橙填充
+    if (w > 0) fill_rect(x, PROG_Y + 2, w, PROG_H - 4, C_WHITE);   // 白色填充(黑白风格)
     s_prog = pct;
 }
 
@@ -334,6 +348,11 @@ void dashboard_run(void) {
     dashboard_progress_to(100, 4);     // 填满
     vTaskDelay(pdMS_TO_TICKS(300));    // 让 100% 停留一瞬
     fill_screen(BG);  // 切换到仪表盘
+    // 启动阶段已取过天气:记录当前分钟,避免进入循环立刻再拉一次(那会造成 1~2 秒黑屏)
+    if (s_time_ok && s_weather_ok) {
+        time_t n = time(NULL); struct tm t; localtime_r(&n, &t);
+        last_wfetch = t.tm_hour*60 + t.tm_min;
+    }
 
     while (1) {
         time_t now = time(NULL);
