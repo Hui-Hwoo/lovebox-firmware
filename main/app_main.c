@@ -269,9 +269,21 @@ void app_main(void) {
     // 健康确认计时器:稳定跑满90s才标记有效;期间若崩溃则引导器自动回滚到上个好版本
     xTaskCreate(health_task, "health", 3072, NULL, 7, NULL);
 
+    // 把启动页的 "starting" 换成进度条(同一页)
+    extern void dashboard_progress_begin(void);
+    extern void dashboard_progress_to(int target, int step_ms);
+    dashboard_progress_begin();
+
     wifi_start();   // 先只开 STA 专心连家里网
     // 给家里 Wi-Fi 充足时间(90s),期间持续重试,绝不因一时慢就放弃
-    EventBits_t bits = xEventGroupWaitBits(s_eg, WIFI_OK, pdFALSE, pdFALSE, pdMS_TO_TICKS(90000));
+    // Wi-Fi 阶段进度条从 0 随时间爬到最多 ~50%
+    EventBits_t bits = 0;
+    for (int i = 0; i < 180; i++) {                 // 180 * 500ms = 90s
+        bits = xEventGroupWaitBits(s_eg, WIFI_OK, pdFALSE, pdFALSE, pdMS_TO_TICKS(500));
+        if (bits & WIFI_OK) break;
+        dashboard_progress_to((i * 50) / 180, 0);   // 随等待时间线性爬升
+    }
+    if (bits & WIFI_OK) dashboard_progress_to(55, 6);  // 连上:平滑补到 55%
 
     extern void dashboard_run(void);
     extern void dashboard_setup_screen(void);

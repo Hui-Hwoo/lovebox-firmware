@@ -244,12 +244,50 @@ static void draw_left_line(int y, const char *s, uint16_t fg, int scale, int cle
     draw_text(x, y, s, fg, BG, scale);
 }
 
+// ---------- 启动页:品牌名 + 进度条 ----------
+#define SPLASH_TITLE_Y 80      // "AlgoStone" 大字(scale 3, 24px 高)
+#define PROG_Y     150         // 进度条/starting 文字的纵向位置
+#define PROG_H     16          // 进度条高度
+#define PROG_MGN   50          // 进度条左右留白
+static int s_prog = 0;         // 当前进度 0..100
+
 // 开机即点屏的启动画面(在连 Wi-Fi 之前调用,避免黑屏等待)
+// 初始:AlgoStone + 下方 "starting"
 void dashboard_splash(void) {
     display_init();                    // 点亮背光 + 初始化(可重复调用)
     fill_screen(C_BLACK);
-    draw_center(70,  "LOVEBOX", 0xFFFF, C_BLACK, 5);
-    draw_center(140, "starting...", GRAY(140), C_BLACK, 2);
+    draw_center(SPLASH_TITLE_Y, "AlgoStone", 0xFFFF, C_BLACK, 3);
+    draw_center(PROG_Y, "starting", GRAY(140), C_BLACK, 2);
+}
+
+// 把 "starting" 文字换成空进度条外框(同一页,不换屏)
+void dashboard_progress_begin(void) {
+    int W = display_width();
+    fill_rect(0, PROG_Y - 4, W, PROG_H + 24, C_BLACK);   // 清掉 "starting" 文字
+    int x = PROG_MGN, w = W - 2*PROG_MGN;
+    fill_rect(x, PROG_Y, w, PROG_H, GRAY(70));            // 外框(暗)
+    fill_rect(x + 2, PROG_Y + 2, w - 4, PROG_H - 4, C_BLACK); // 内部挖空
+    s_prog = 0;
+}
+
+// 把进度条立即填充到 pct(0..100)
+static void progress_set(int pct) {
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    int W = display_width();
+    int x = PROG_MGN + 2, fullw = W - 2*PROG_MGN - 4;
+    int w = fullw * pct / 100;
+    if (w > 0) fill_rect(x, PROG_Y + 2, w, PROG_H - 4, C_CLAUDE);  // 品牌橙填充
+    s_prog = pct;
+}
+
+// 平滑推进到 target:逐格填充,step_ms 控制速度(0=瞬间)
+void dashboard_progress_to(int target, int step_ms) {
+    if (target > 100) target = 100;
+    while (s_prog < target) {
+        progress_set(s_prog + 1);
+        if (step_ms > 0) vTaskDelay(pdMS_TO_TICKS(step_ms));
+    }
 }
 
 // 配网模式提示屏(连不上已存 Wi-Fi 时)
@@ -268,12 +306,15 @@ void dashboard_setup_screen(void) {
 
 void dashboard_run(void) {
     display_init();
-    fill_screen(BG);
-    draw_center(100, "connecting...", GRAY(140), BG, 2);
+    // 不换屏:继续启动页上的进度条(Wi-Fi 阶段已推到 ~55%)
+    dashboard_progress_to(60, 6);
 
     sntp_start();
+    dashboard_progress_to(70, 6);
     geocode(g_cfg.city);       // 城市名 -> 坐标
+    dashboard_progress_to(80, 6);
     fetch_weather();
+    dashboard_progress_to(90, 6);
 
     // 缓存上次渲染内容;只有变化时才重画,避免闪烁
     char cur_clock[8] = "",  last_clock[8] = "";
@@ -285,9 +326,14 @@ void dashboard_run(void) {
     bool div_drawn = false, icon_drawn = false, ver_drawn = false;
     int  last_wfetch = -1000;   // 分钟计数,用于每15分钟刷新天气
 
-    // 等首次对时(最多30秒),期间保持提示
-    for (int i = 0; i < 30 && !s_time_ok; i++) vTaskDelay(pdMS_TO_TICKS(1000));
-    fill_screen(BG);  // 清掉提示语
+    // 等首次对时(最多30秒),进度条在 90~99% 间缓慢爬动
+    for (int i = 0; i < 30 && !s_time_ok; i++) {
+        dashboard_progress_to(90 + (i * 9) / 30, 0);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    dashboard_progress_to(100, 4);     // 填满
+    vTaskDelay(pdMS_TO_TICKS(300));    // 让 100% 停留一瞬
+    fill_screen(BG);  // 切换到仪表盘
 
     while (1) {
         time_t now = time(NULL);
