@@ -19,6 +19,8 @@
 #include "driver/gpio.h"
 #include "lovebox_config.h"
 #include "netcfg.h"
+#include "splash.h"
+#include "screen_manager.h"
 
 // GitHub Releases 自动更新源(公开仓库,免登录拉取)
 #define GH_OTA_URL "https://github.com/Hui-Hwoo/lovebox-firmware/releases/latest/download/firmware.bin"
@@ -263,16 +265,13 @@ void app_main(void) {
     ESP_LOGI(TAG, "启动 v2。运行分区=%s", run ? run->label : "?");
 
     // 一上电就点屏显示启动画面(不再黑屏等 Wi-Fi)
-    extern void dashboard_splash(void);
-    dashboard_splash();
+    ui_splash();
 
     // 健康确认计时器:稳定跑满90s才标记有效;期间若崩溃则引导器自动回滚到上个好版本
     xTaskCreate(health_task, "health", 3072, NULL, 7, NULL);
 
     // 把启动页的 "starting" 换成进度条(同一页)
-    extern void dashboard_progress_begin(void);
-    extern void dashboard_progress_to(int target, int step_ms);
-    dashboard_progress_begin();
+    ui_progress_begin();
 
     wifi_start();   // 先只开 STA 专心连家里网
     // 给家里 Wi-Fi 充足时间(90s),期间持续重试,绝不因一时慢就放弃
@@ -281,25 +280,22 @@ void app_main(void) {
     for (int i = 0; i < 180; i++) {                 // 180 * 500ms = 90s
         bits = xEventGroupWaitBits(s_eg, WIFI_OK, pdFALSE, pdFALSE, pdMS_TO_TICKS(500));
         if (bits & WIFI_OK) break;
-        dashboard_progress_to((i * 50) / 180, 0);   // 随等待时间线性爬升
+        ui_progress_to((i * 50) / 180, 0);   // 随等待时间线性爬升
     }
-    if (bits & WIFI_OK) dashboard_progress_to(55, 6);  // 连上:平滑补到 55%
-
-    extern void dashboard_run(void);
-    extern void dashboard_setup_screen(void);
+    if (bits & WIFI_OK) ui_progress_to(55, 6);  // 连上:平滑补到 55%
 
     if (bits & WIFI_OK) {
         wifi_enable_ap();                 // 连上后再开常驻热点(同信道,不冲突)
         netcfg_start_web();               // 设置页:http://<STA IP> 和 http://192.168.4.1 都可访问
         xTaskCreate(ota_task, "ota", 8192, NULL, 5, NULL);          // 局域网 OTA(Mac 在才生效)
         xTaskCreate(github_ota_task, "ghota", 9216, NULL, 5, NULL); // GitHub HTTPS 自动更新(5分钟)
-        xTaskCreate((TaskFunction_t)dashboard_run, "dash", 10240, NULL, 4, NULL);
-        ESP_LOGI(TAG, "就绪:仪表盘运行,设置页 http://%s 或 http://192.168.4.1", g_ip);
+        xTaskCreate((TaskFunction_t)screen_manager_run, "screens", 10240, NULL, 4, NULL);
+        ESP_LOGI(TAG, "就绪:画面调度运行,设置页 http://%s 或 http://192.168.4.1", g_ip);
     } else {
         // 90s 没连上 -> 纯 AP 配网(不挡 STA),5分钟后重启重试(STA优先,自动恢复)
         wifi_setup_ap_only();
         netcfg_start_web();
-        xTaskCreate((TaskFunction_t)dashboard_setup_screen, "setup", 8192, NULL, 4, NULL);
+        xTaskCreate((TaskFunction_t)ui_splash_setup_screen, "setup", 8192, NULL, 4, NULL);
         xTaskCreate(setup_retry_task, "setupretry", 3072, NULL, 6, NULL);
         ESP_LOGW(TAG, "未连上家里网,配网屏:连 %s -> 打开 192.168.4.1(5分钟后自动重试)", AP_SSID);
     }

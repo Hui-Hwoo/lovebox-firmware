@@ -13,6 +13,7 @@
 #include "esp_app_desc.h"
 #include "netcfg.h"
 #include "lovebox_config.h"
+#include "screen_manager.h"
 
 static const char *T = "netcfg";
 lb_cfg_t g_cfg;
@@ -26,16 +27,18 @@ void netcfg_load(void) {
     strncpy(g_cfg.pass, LB_WIFI_PASS, sizeof(g_cfg.pass)-1);
     strncpy(g_cfg.city, "San Francisco", sizeof(g_cfg.city)-1);
     g_cfg.unit = 'F';
+    strncpy(g_cfg.screen, "clockwx", sizeof(g_cfg.screen)-1);
 
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) { ESP_LOGI(T, "无存储配置,用默认"); return; }
     size_t n;
-    n = sizeof(g_cfg.ssid); nvs_get_str(h, "ssid", g_cfg.ssid, &n);
-    n = sizeof(g_cfg.pass); nvs_get_str(h, "pass", g_cfg.pass, &n);
-    n = sizeof(g_cfg.city); nvs_get_str(h, "city", g_cfg.city, &n);
+    n = sizeof(g_cfg.ssid);   nvs_get_str(h, "ssid", g_cfg.ssid, &n);
+    n = sizeof(g_cfg.pass);   nvs_get_str(h, "pass", g_cfg.pass, &n);
+    n = sizeof(g_cfg.city);   nvs_get_str(h, "city", g_cfg.city, &n);
+    n = sizeof(g_cfg.screen); nvs_get_str(h, "screen", g_cfg.screen, &n);
     uint8_t u; if (nvs_get_u8(h, "unit", &u) == ESP_OK) g_cfg.unit = (char)u;
     nvs_close(h);
-    ESP_LOGI(T, "已载入配置: ssid=%s city=%s unit=%c", g_cfg.ssid, g_cfg.city, g_cfg.unit);
+    ESP_LOGI(T, "已载入配置: ssid=%s city=%s unit=%c screen=%s", g_cfg.ssid, g_cfg.city, g_cfg.unit, g_cfg.screen);
 }
 
 void netcfg_save(const lb_cfg_t *c) {
@@ -44,10 +47,20 @@ void netcfg_save(const lb_cfg_t *c) {
     nvs_set_str(h, "ssid", c->ssid);
     nvs_set_str(h, "pass", c->pass);
     nvs_set_str(h, "city", c->city);
+    nvs_set_str(h, "screen", c->screen);
     nvs_set_u8(h, "unit", (uint8_t)c->unit);
     nvs_commit(h);
     nvs_close(h);
-    ESP_LOGI(T, "配置已保存(ssid=%s city=%s unit=%c)", c->ssid, c->city, c->unit);  // 不打印密码
+    ESP_LOGI(T, "配置已保存(ssid=%s city=%s unit=%c screen=%s)", c->ssid, c->city, c->unit, c->screen);  // 不打印密码
+}
+
+// 仅持久化当前画面 id(供热切换用,不动其它字段、不重启)
+static void save_screen_only(const char *id) {
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_str(h, "screen", id);
+    nvs_commit(h);
+    nvs_close(h);
 }
 
 // ---------- URL 解码(表单 application/x-www-form-urlencoded)----------
@@ -115,6 +128,26 @@ static esp_err_t root_get(httpd_req_t *req) {
         "<button type=submit>保存并重启</button>"
         "<p class=hint>保存后设备会重启并用新设置连接。</p>"
         "</form>"
+        "<hr style='border-color:#333;margin:28px 0'>",
+        g_cfg.city,
+        g_cfg.unit=='F' ? " selected" : "",
+        g_cfg.unit=='C' ? " selected" : "");
+
+    // 画面选择(热切换,不重启)
+    n += snprintf(html+n, sizeof(html)-n,
+        "<h2>显示画面</h2>"
+        "<label>选择当前显示的画面(立即切换,无需重启)</label>"
+        "<select id=scr>");
+    const char *cur = screen_manager_current_id();
+    for (int i = 0; i < screen_manager_count() && n < (int)sizeof(html)-300; i++) {
+        const screen_t *s = screen_manager_get(i);
+        n += snprintf(html+n, sizeof(html)-n, "<option value=\"%s\"%s>%s</option>",
+                      s->id, (cur && strcmp(cur, s->id)==0) ? " selected" : "", s->name);
+    }
+    n += snprintf(html+n, sizeof(html)-n,
+        "</select>"
+        "<button type=button onclick='setscr()' style='background:#2d7;color:#000'>应用画面</button>"
+        "<p id=ss class=hint></p>"
         "<hr style='border-color:#333;margin:28px 0'>"
         "<h2>固件更新</h2>"
         "<button type=button onclick='chk()' style='background:#2d7;color:#000'>立即检查 GitHub 更新</button>"
@@ -134,11 +167,12 @@ static esp_err_t root_get(httpd_req_t *req) {
         "try{var r=await fetch('/ota',{method:'POST',body:f});"
         "s.textContent=r.ok?'更新成功,设备重启中…':('失败: '+await r.text());}"
         "catch(e){s.textContent='上传已结束(设备可能正在重启)';}}"
+        "async function setscr(){var v=document.getElementById('scr').value;"
+        "var o=document.getElementById('ss');o.textContent='切换中…';"
+        "try{var r=await fetch('/screen',{method:'POST',body:v});"
+        "o.textContent=r.ok?('已切换到:'+v):'失败';}catch(e){o.textContent='请求失败';}}"
         "</script>"
         "</body></html>",
-        g_cfg.city,
-        g_cfg.unit=='F' ? " selected" : "",
-        g_cfg.unit=='C' ? " selected" : "",
         g_ota_status);
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_send(req, html, n);
@@ -151,6 +185,22 @@ static void reboot_task(void *a) { vTaskDelay(pdMS_TO_TICKS(800)); motor_spin(3)
 static esp_err_t checkupdate_post(httpd_req_t *req) {
     trigger_update_check();
     httpd_resp_sendstr(req, "checking");
+    return ESP_OK;
+}
+
+// 网页"应用画面":热切换当前显示画面(不重启),并持久化选择
+static esp_err_t screen_post(httpd_req_t *req) {
+    char id[16] = {0};
+    int total = 0, r;
+    while (total < (int)sizeof(id)-1 && (r = httpd_req_recv(req, id+total, sizeof(id)-1-total)) > 0) total += r;
+    id[total] = 0;
+    for (char *p = id; *p; p++) if (*p=='\r'||*p=='\n'||*p==' ') { *p = 0; break; }  // 去掉尾部空白
+    if (!id[0]) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no id"); return ESP_FAIL; }
+    strncpy(g_cfg.screen, id, sizeof(g_cfg.screen)-1); g_cfg.screen[sizeof(g_cfg.screen)-1] = 0;
+    save_screen_only(g_cfg.screen);
+    screen_manager_select(g_cfg.screen);
+    ESP_LOGI(T, "网页切换画面 -> %s", g_cfg.screen);
+    httpd_resp_sendstr(req, "OK");
     return ESP_OK;
 }
 
@@ -218,9 +268,11 @@ void netcfg_start_web(void) {
     httpd_uri_t u_save = { .uri="/save", .method=HTTP_POST, .handler=save_post };
     httpd_uri_t u_ota  = { .uri="/ota", .method=HTTP_POST, .handler=ota_post };
     httpd_uri_t u_chk  = { .uri="/checkupdate", .method=HTTP_POST, .handler=checkupdate_post };
+    httpd_uri_t u_scr  = { .uri="/screen", .method=HTTP_POST, .handler=screen_post };
     httpd_register_uri_handler(srv, &u_root);
     httpd_register_uri_handler(srv, &u_save);
     httpd_register_uri_handler(srv, &u_ota);
     httpd_register_uri_handler(srv, &u_chk);
+    httpd_register_uri_handler(srv, &u_scr);
     ESP_LOGI(T, "设置网页已启动(:80),含固件上传 /ota 与检查更新 /checkupdate");
 }

@@ -6,7 +6,8 @@ typedef struct {
     char ssid[33];
     char pass[65];
     char city[48];
-    char unit;        // 'F' 或 'C'
+    char unit;         // 'F' 或 'C'
+    char screen[16];   // 当前画面 id(如 "clockwx")
 } lb_cfg_t;
 
 extern lb_cfg_t g_cfg;       // 当前生效配置
